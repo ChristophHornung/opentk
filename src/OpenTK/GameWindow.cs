@@ -92,6 +92,10 @@ namespace OpenTK
 
         private FrameEventArgs update_args = new FrameEventArgs();
         private FrameEventArgs render_args = new FrameEventArgs();
+        private double nextRenderStart;
+        private double nextDispatchStart;
+        private double timestamp;
+        private double slack;
 
         /// <summary>Constructs a new GameWindow with sensible default attributes.</summary>
         public GameWindow()
@@ -370,9 +374,23 @@ namespace OpenTK
                     {
                         if (isSingleThreaded)
                         {
-                            DispatchUpdateFrame(watchRender);
+                            this.nextDispatchStart = DispatchUpdateFrame(watchRender);
+                            this.nextRenderStart = DispatchRenderFrame();
+                            this.timestamp = this.watchRender.Elapsed.TotalSeconds;
+                            this.slack = this.ClampElapsed(Math.Min(this.nextDispatchStart, this.nextRenderStart) -
+                                                        timestamp);
+                            var slackInMs = (int)(slack * 800);
+                            if (slackInMs > 5)
+                            {
+                                SpinWait.SpinUntil(() => false, slackInMs);
+                            }
                         }
-                        DispatchRenderFrame();
+                        else
+                        {
+                            this.nextRenderStart = DispatchRenderFrame();
+                        }
+                        
+
                     }
                     else
                     {
@@ -406,7 +424,7 @@ namespace OpenTK
             return MathHelper.Clamp(elapsed, 0.0, 1.0);
         }
 
-        private void DispatchUpdateFrame(Stopwatch watch)
+        private double DispatchUpdateFrame(Stopwatch watch)
         {
             int is_running_slowly_retries = 4;
             double timestamp = watch.Elapsed.TotalSeconds;
@@ -438,12 +456,14 @@ namespace OpenTK
                 {
                     // If UpdateFrame consistently takes longer than TargetUpdateFrame
                     // stop raising events to avoid hanging inside the UpdateFrame loop.
-                    break;
+                    return timestamp;
                 }
             }
+
+            return this.is_running_slowly ? timestamp : this.update_timestamp + this.TargetUpdatePeriod - this.update_epsilon;
         }
 
-        private void DispatchRenderFrame()
+        private double DispatchRenderFrame()
         {
             double timestamp = watchRender.Elapsed.TotalSeconds;
             double elapsed = ClampElapsed(timestamp - render_timestamp);
@@ -451,6 +471,8 @@ namespace OpenTK
             {
                 RaiseRenderFrame(elapsed, ref timestamp);
             }
+
+            return render_timestamp + this.TargetRenderPeriod;
         }
 
         private void RaiseUpdateFrame(Stopwatch watch, double elapsed, ref double timestamp)
